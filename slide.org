@@ -1,0 +1,123 @@
+#+TITLE:     Profiling and Analysis of Distributed Deep Learning 
+#+AUTHOR:    Dung Nguyen 
+#+EMAIL:     dungn@clemson.edu 
+#+DATE:      2018-12-07 Fri 
+#+DESCRIPTION: 
+#+KEYWORDS: 
+#+LANGUAGE:  en
+#+OPTIONS:   H:2 num:t toc:t \n:nil @:t ::t |:t ^:t -:t f:t *:t <:t
+#+OPTIONS:   TeX:t LaTeX:t skip:nil d:nil todo:t pri:nil tags:not-in-toc
+#+INFOJS_OPT: view:nil toc:nil ltoc:t mouse:underline buttons:0 path:https://orgmode.org/org-info.js
+#+EXPORT_SELECT_TAGS: export
+#+EXPORT_EXCLUDE_TAGS: noexport
+#+LINK_UP:   
+#+LINK_HOME: 
+
+#+startup: beamer
+#+LaTeX_CLASS: beamer
+#+LaTeX_CLASS_OPTIONS: [bigger]
+
+#+BEAMER_FRAME_LEVEL: 2
+#+COLUMNS: %40ITEM %10BEAMER_env(Env) %9BEAMER_envargs(Env Args) %4BEAMER_col(Col) %10BEAMER_extra(Extra)
+
+* Introduction
+** Distributed Machine Learning and Parameter Server 
+   #+ATTR_LATEX: width=\textwidth
+    [[file:DistributedML.png]]
+
+** Horovod and ring-allreduce 
+   - There is no central parameter servers
+   - Peer-to-peer model as a ring buffer
+   - Multiple communication interactions
+   #+ATTR_LATEX: width=\textwidth
+    [[file:Ring-Allreduce.png]]
+** Goal
+   - Examine the scalability of Horovod
+     - Replicate reported results
+     - Analyze benchmark data
+   - Improvements suggestion
+
+* Scalability of Horovod
+** Replication of reported results
+   :PROPERTIES:
+   :BEAMER_opt: allowframebreaks,label=
+   :END:
+   - "Horovod achieves 90% scaling efficiency for both Inception V3 and ResNet-101, and 68% scaling efficiency for VGG-16." cite:sergeev18:horov
+   #+ATTR_LATEX: width=\textwidth
+    [[file:HorovodBenchmark.png]]
+   
+** System setup
+   - 3 models are evaluated
+   - With default batch size of 64 on synthetic data
+*** Horovod Setup                                                     :BMCOL:
+    :PROPERTIES:
+    :BEAMER_col: 0.5 
+    :END:
+    - Horovod
+      - 1:128 servers, 4 Pascal GPUs each
+      - 25 Gbps network
+*** My Setup                                                          :BMCOL:
+    :PROPERTIES:
+    :BEAMER_col: 0.5 
+    :END:
+    - My setup
+      - 1:10 servers, 2 V100 GPUs each 
+      - 25 Gbps network
+
+** Replication results
+   - In the best case: near optimal speedup, up to 20 GPUs
+   - In the worst case, efficiency is about 25%
+   #+ATTR_LATEX: width=0.75\textwidth
+    [[file:Speedup-batch-64.png]]
+** Can batch size help?
+   - Yes, increase till they run out of memory
+   #+ATTR_LATEX: width=0.75\textwidth
+    [[file:Throughput-all-batches.png]]
+
+** Local vs Distributed and the effect of network communication
+   - Network communication makes them slow (a bit)!!! 
+   #+ATTR_LATEX: width=0.75\textwidth
+    [[file:Throughput-2-gpus.png]]
+  
+* Profiling
+
+** Profiling: Network and GPU Utilization
+   - Worst case scenario: VGG + small batch size (32)
+   #+ATTR_LATEX: width=0.75\textwidth
+    [[file:VGG Batch size: 32.png]]
+
+** Profiling: Network and GPU Utilization (cont)
+   - Best case scenario: Inception v3 + large batch size (128)
+   #+ATTR_LATEX: width=0.75\textwidth
+    [[file:Inception Batch size: 128.png]]
+
+** Performance Hypothesis
+   - Maximum bandwidth of the system: 25 Gbps ~ 3e6 KBps
+   - Network communication may harm the speedup, but the bandwidth does not
+   - *Hypotheses*: 
+     - Inefficient implementation of VGG16 
+     - Inefficient communication operations
+
+** Timeline Analysis
+   - VGG 16
+   - 2 batches, 4 GPUs: 2 batches x [2 x (N - 1)] = 12 rounds of commutations
+   #+ATTR_LATEX: width=0.75\textwidth
+    [[file:Timeline-vgg.png]]
+** Timeline Analysis (cont)
+   - Inception 
+   #+ATTR_LATEX: width=0.75\textwidth
+    [[file:Timeline-inception.png]]
+   
+* Conclusion
+** Conclusion
+  - Can not replicate origin results on our *hardware*
+  - Not all models are created equal
+  - When things go bad, batch size helps
+  - Yes, communication plays a role, but bandwidth does not
+  - We need a better algorithm to work with non-uniform data distribution
+    - Horovod's authors blame network bottle neck for VGG?
+ 
+** References
+
+   bibliographystyle:unsrt
+   bibliography:ml.bib 

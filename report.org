@@ -1,0 +1,183 @@
+#+TITLE: Profiling and analysis of distributed deep learning 
+#+Macro: aa $1@@latex:\\@@$2
+#+Macro: and @@latex:\and@@
+#+Author: {{{aa({{{aa(Dung Nguyen, Clemson University)}}}, dungn@clemson.edu)}}}
+#+EXPORT_SELECT_TAGS: export
+#+EXPORT_EXCLUDE_TAGS: noexport
+
+#+startup: IEEEtran
+#+OPTIONS:   toc:nil
+#+LaTeX_CLASS: IEEEtran
+#+LaTeX_CLASS_OPTIONS: [conference]
+
+#+BEGIN_EXPORT latex
+\begin{abstract}
+Nowadays, training big neural networks takes enormous amount of computing resources. One single machine, even with most powerful accerelated hardware devices is not pratically sufficient for this task, since it may take months to years to train such networks. The process of training deep networks must be executed in distibuted systems using multiple machines. In this project, we aim to benchmark the performance of a widely used distributed deep learning framework, profile its runtime to analyze its scalability in our infrastructure. The experimental results show that there are drawbacks in the communication operators as well as implementation of neural networks that restrict the scalability of specific deep learning models. 
+\end{abstract}
+#+END_EXPORT
+
+* Introduction
+    #+CAPTION:    Distributed Neural Network Training cite:sergeev18:horov
+    #+ATTR_LATEX: :width 0.5\textwidth
+    #+LABEL:      fig:DistributedML
+    [[file:DistributedML.png]]
+  
+  Deep learning is getting more and more success in recent years in fields such as computer vision or voice recognition. Deep learning algorithms show significant advantages over other machine learning methods in term of accuracy and ease of use. Usually, accurate neural networks are composed of dozens to hundreds of layers with millions to billions connections among neurons. Training these networks are difficult and not practical to be done in a single computer, because the training process even on the most powerful hardware may takes months to converge. Training deep learning networks in distributed systems is necessary to reduce the training times to reasonable amounts.
+  
+  The main problems to all distributed systems and applications running in these systems are all related to efficiency, the ability to scale performances when increase the number of processing nodes. Scaling distributed deep learning is a major challenge in research, due to complex dependencies among layers in deep learning networks. Computations on each layer of a neural network have to wait for its dependent layer's computations to finish then gather the necessary intermediate results from multiple workers. 
+    
+  In this project, we try to understand how a distributed deep learning framework named Horovod works, replicate its experimental performance and profile and analyze its scalability in our hardware infrastructure.
+  
+  In section [[sec:param]], we introduce about Parameter Server and Horovod framework. Section [[sec:setup]] illutrates how we setup our experiments. Section [[sec:experiment]] reports the performances of experiments. Analysis and profiling will be described in Section [[sec:profiling]]. Finally, we will discuss and conclude in Section [[sec:conclusion]]. 
+
+* Parameter Server & Communication Pattern
+  <<sec:param>>
+
+  Tensorflow cite:abadi16:tensor adopts a centralized parameter server model for distributed training. Parameter servers can consist of one or multi servers to receive parameters or gradients from all workers in the cluster and aggregate them to compute final gradients, usually by averaging the values from all workers. cite:li2014scaling The final results, are transmitted back to all workers to update their replicas.
+  
+  The centralized model contains a bottle neck in parameter servers. After each iteration, the centralized parameter servers have to receive a large amount of data from all workers, which could create network congestion in parameter server's side. Increasing the number of parameter servers may reduce the network congestion, but also may increase the cost to synchronize between parameter servers and/or data partitioning.
+
+    #+CAPTION:    Ring-All reduce algorithm cite:sergeev18:horov
+    #+NAME:       fig:Ring-AllReduce
+    #+ATTR_LATEX: :float  multicolumn
+    [[file:Ring-Allreduce.png]]
+
+  Horovod cite:sergeev18:horov does not use a centralized parameter server model. Instead, parameters are exchanged in a peer-to-peer model and aggregated by all workers in the cluster like a ring buffer. The final results, after being calculated in all nodes, are transferred in the same method among all workers.
+
+  Figure [[fig:Ring-AllReduce]] illustrates the Ring-AllReduce algorithm cite:patarasuk2009bandwidth to calculate and transfer data in a cluster. The algorithm is divided into 2 phases, each  consists of N - 1 data exchanges, where N is the number of workers in the cluster. The first phase (iteration 2-3 in Figure [[fig:Ring-AllReduce]]) calculates an aggregated results iteratively in all workers. In the end of the first phase, each worker keeps exactly one fully aggregated block while the others are intermediate results in aggregations. In the second phase, the aggregated blocks are broastcasted to the whole cluster also in N - 1 iterations.
+
+  In each iteration of both phases, the cluster forms a circular data exchange graph that mimics a ring buffer. In each iteration, a worker sends exactly one block of data and receives exactly one block. The graph order may change between consecutive iterations, such as in iteration 2 and 3 in Figure [[fig:Ring-AllReduce]].
+  
+  In total, each call of Ring-AllReduce operator requires 2 * (N - 1) data exchanges among workers in a cluster of N workers.
+
+* Experimental setup
+  <<sec:setup>>
+** Horovod setup
+
+    #+CAPTION:    Horovod Benchmark results cite:sergeev18:horov
+    #+ATTR_LATEX: :width 0.5\textwidth
+    #+LABEL:      fig:HorovodBenchmark
+    [[file:HorovodBenchmark.png]]
+    
+  Horovod's authors claim that the framework can achieve nearly 90% efficiency when it runs on a cluster of 512 GPUs in best case scenarios with Inception V3 and Resnet 101 models. In the worst case scenario, Horovod can achieve a much lower efficiency, around 70% with VGG-16. Figure [[fig:HorovodBenchmark]] shows the training throughput of 3 models on different hardware configurations from 1 to 512 GPUs.
+  
+  The benchmarks performed by Horovod's authors are executed on a cluster of 128 nodes with 512 Pascal GPUs in total. Each node in the cluster has 4 GPUs and 25 Gbps network connection.
+  
+  The benchmark uses Tensorflow's standard benchmark, running on OpenMPI with synthetic data. The training process in the benchmark uses a batch size of 64 for all experiments.
+  
+  The main performance metric used in the experiments is the throughput of training processes, measured by the number of trained images per second.
+
+** Palmetto setup
+   In this project, we setup Palmetto cluster to perform our Horovod experiments. All software configurations are replicated from Horovod's benchmarks, using Tensorflow's standard benchmarks on OpenMPI with synthetic data. We replicate the batch size of 64, which is used in Horovod's benchmarks and also try different values of batch size (32, 64, 128) in our experiments.
+   
+   All experiments are executed on a cluster of 10 nodes in phase 18c on Palmetto cluster. Each node in the cluster has 2 Nvidia V100 GPUs and a 40-core Intel CPU. Nodes are connected by 25 Gbps Infiniband network.
+
+* Results analysis
+  <<sec:experiment>>
+** Replication
+
+    #+CAPTION:    Speedup in different configurations with batch size of 64
+    #+ATTR_LATEX: :width 0.5\textwidth
+    #+LABEL:      fig:SpeedupAllBatch64
+    [[file:Speedup-batch-64.png]]
+    
+  Figure [[fig:SpeedupAllBatch64]] shows the speed up of Horovod in our experiments on Palmetto cluster.
+    
+  Among 3 tested models, only Inception V3 achieves speedup efficiency is close to what reported by Horovod's authors, while the 2 other models are significantly worse than the equivalent reported results. In the worst case scenario, VGG16 only gets about 25-30% speedup efficiency with 20 GPUs, compared to 70% with 512 GPUs in the original study.
+  
+  Resnet 101's speedup efficiency is not as good as reported, but is still far from the level of VGG16.
+  
+  In general, the results we get are different from results reported by original paper in term of speedup scalability. The experiments are tested in 2 different environmental setups, in which Horovod's original study uses 4 weaker GPUs per node. Using more GPUs per node reduces the stress on network connection which possibly help the scalability. However, for newer GPUs, using more GPUs per node may create problems due to the efficiency of internal bandwidth between GPUs and CPUs.
+   
+** Batch size
+
+    #+CAPTION:    Throughput scalability with different batch sizes 
+    #+ATTR_LATEX: :width 0.5\textwidth
+    #+LABEL:      fig:ThroughputAllBatches
+    [[file:Throughput-all-batches.png]]
+    
+  Figure [[fig:ThroughputAllBatches]] shows the throughput scalability of all models with 3 different batch sizes (32, 64 and 128). Among 3 models, only Resnet 101 runs out of memory when being trained with batch size of 128.
+  
+  In general, increasing the value of batch sizes increases the throughput of training processes, but not linearly. In all models, double the batch sizes does not double the throughput. With Inception V3, the difference of performance between batch sizes of 32 and 64 is larger than the difference between 64 and 128. It suggests that the speedup will be bounded when increasing batch sizes to some values. 
+  
+  Increasing the values of batch size requires larger GPU's spaces to store intermediate tensors in calculations. Even the most recent GPUs like Nvidia V100s are sufficient for batch size of 1 or 2 for very deep neural networks. cite:srivastava2018performance
+   
+** Effect of network communication 
+
+    #+CAPTION:    Ring-All reduce algorithm 
+    #+LABEL:      fig:Throughput2GPUS
+    #+ATTR_LATEX: :width 0.5\textwidth
+    [[file:Throughput-2-gpus.png]]
+    
+  In this experiment, we want to experimentally examine the effect of network communication to the performance of distributed training process. We setup 2 experimental scenarios in this experiment: training all deep learning models on 2 GPUs in the same machine and in different machines. When the framework trains on different machines, network communication involve in all data exchange operators (i.e Ring-AllReduce operators in this framework) between workers. Using 2 GPUs in the same machine, the same operators will use internal connections only, which are expected to be faster.
+  
+  Figure [[fig:Throughput2GPUS]] shows the throughput of all training processes on these scenarios with different batch sizes. Using 2 GPUs in the same node brings some advantages over using 2 GPUs in different nodes as expected. The differences are more significant in small batch sizes (32) and less in larger batch sizes (128).
+   
+* Profiling
+  <<sec:profiling>>
+** GPU Utilization and network communication
+
+    #+CAPTION:    GPU Utilization and Network Bandwidth (VGG16, batch size 32) 
+    #+LABEL:      fig:gpu-network-vgg
+    #+ATTR_LATEX: :width 0.5\textwidth
+    [[file:VGG Batch size: 32.png]]
+
+    #+CAPTION:    GPU Utilization and Network Bandwidth (InceptionV3, batch size 128) 
+    #+LABEL:      fig:gpu-network-inception
+    #+ATTR_LATEX: :width 0.5\textwidth
+    [[file:Inception Batch size: 128.png]]
+    
+  In this and following sections, we will analyze the profiling results of 2 most extreme experiments: VGG 16 with batch size of 32 and Inception V3 with batch size of 128. The former is the slowest configurations and the latter is the fastest of all, in term of training throughput. We report the profiling results on a 4-GPU (in 2 nodes) hardware setting.
+  
+  Figure [[fig:gpu-network-vgg]] and Figure [[fig:gpu-network-inception]] show the GPU utilization and Network bandwidth of configurations above from the beginning of the training processes to the end of the 2nd iterations. In these figures, we report statistics measured in both network interfaces $eth0$ and $ib0$, since some MPI's traffic goes through $ib0$ and is not recorded by $eth0$. However, these interface's statistics are strongly correlated and the differences do not affect our analysis.
+  
+  The patterns of GPU utilization and Network bandwidth in 2 configurations are totally different, which suggest the speedup efficiency of them. 
+  
+  From when the training process starts, GPU utilization in the Inception configuration stays steady at high levels (near 100%), while the same statistics in the VGG configuration fluctuates in most of the time. In some parts of the timeline, the VGG's GPU utilization stays at 0%, which indicates stall situations in the computation. It suggests that some computations are blocked by data exchange operators in VGG16. The incident is not observed in the Inception configuration.
+  
+  The amounts of data exchanges are also different in 2 configurations. We note that in the data exchanges, only gradients of neural networks are exchanged and aggregated. Therefore, the amounts of data exchanges are independent of batch sizes.
+
+  The median bandwidth in VGG configuration is around 500 MBps, while the same value in Inception V3 is only 125 MBps. Both values are significantly smaller than the maximum bandwidth by the hardware (25Gbps ~ 3000MBps). Both configuration's bandwidth timelines show the fluctuations, which happen every time in each Ring-AllReduce iteration. 
+  
+  In VGG configurations, the GPU utilization goes down at the same moments with network bandwidth. It shows an inefficiency in the data exchange model that make the framework under-utilize both network bandwidth and GPU time.
+
+** GPU Timeline
+  
+    #+CAPTION:    GPU timeline (VGG, batch size 32) 
+    #+LABEL:      fig:timeline-vgg
+    #+ATTR_LATEX: :width 0.5\textwidth
+    [[file:Timeline-vgg.png]]
+
+    #+CAPTION:    GPU timeline (Inception V3, batch size 128) 
+    #+LABEL:      fig:timeline-inception
+    #+ATTR_LATEX: :width 0.5\textwidth
+    [[file:Timeline-inception.png]]
+    
+  In this section, we analyze the GPU timelines reported by the deep learning framework (Tensorflow). A GPU timeline illustrates how much time an operator is executed on GPU. Each operator is attached to the tensor it is called on. In the context of deep learning, a tensor may represent a layer (or some parts of a layer) in a neural network.
+  
+  Figure [[fig:timeline-vgg]] and Figure [[fig:timeline-inception]] show the timelines of important operators in this context, mostly related to AllReduce operators.
+  
+  The timeline illustrate 2 training iterations. Each iteration requires 6 AllReduce operators to calculate and exchange data between 4 workers (4 GPUs). Therefore in total, there are 13 AllReduce operation cycles per tensor (1 additional cycle for initial parameters transfer at the beginning of the training processes). 
+
+  While the timeline of the Inception configuration seems evenly divided by tensors, the timeline of the VGG configuration does not. The AllReduce cycles at $gradient-AddN-5-0$ (pid 39) takes significantly longer in GPU time and block all other tensor's operators. In each cycle of AllReduce on all tensors, pid 39 occupies about 70-80% of GPU time. Also, multiple AllReduce operators from multiple tensors in the Inception configuration are executed in the same time and not blocked by others. 
+
+  VGG's structure contains a fully connected layer of neurons, which also produces a large number of parameters. It is necessary to investigate if the layer contributes to the computation and data exchange in the "gradient-addN-5-0" tensor. 
+
+* Conclusion and discussion
+  <<sec:conclusion>>
+  In this project, we setup experiments to examine the scalability of Horovod framework and analyze its performances on various configurations. Our experiments show that the speedup efficiency of Horovod on our hardware systems is not consistent with reported results in the original paper. Some models in our experiments are observed to have low efficiency while other's performances are close to the reported results.
+
+  For models that have inefficient performances, increasing the values of batch sizes in training helps increase the overall performances. 
+
+  Network communication plays some roles in the efficiency of distributed deep learning. Though in our experiments, the framework still cannot utilize the maximum bandwidth of the network.
+
+  Some models experience anomalies in data exchanges, in which some operators take significantly longer time on GPUs and block all other operators to execute or exchange data. Further investigation needs to be done in order to understand the reasons behind these anomalies and optimize data exchange operators, especially for large tensors.
+
+  In future work, we want to investigate the blocking issues in VGG 16 model, where some operators take unusual longer time on GPU and block all other operators. From what we observe in the profiling, both GPU and network bandwidth are under-utilized, which inidicates there are many rooms for improvement in the framework.
+
+bibliographystyle:unsrt
+bibliography:ml.bib 
+
+* draft :noexport:
+   # +ATTR_LATEX: :width 0.5\textwidth
+   # +Author: {{{aa(name1, affil1)}}} {{{and()}}} {{{aa(name2, affil2)}}}  {{{and()}}} {{{aa(name3, affil3)}}}
